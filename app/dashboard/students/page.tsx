@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   Search, GraduationCap, Mic, FileText, RefreshCw,
   ChevronUp, ChevronDown, Download, Trophy, Medal, Award,
@@ -10,7 +10,7 @@ import { api } from "@/lib/api";
 import { getStoredUser } from "@/lib/auth";
 import clsx from "clsx";
 
-type SortKey = "name" | "interviews" | "resumes" | "interviewPct" | "resumePct";
+type SortKey = "name" | "interviews" | "resumes" | "interviewPct" | "resumePct" | "score";
 type SortDir = "asc" | "desc";
 type Tab = "leaderboard" | "all";
 
@@ -150,11 +150,13 @@ export default function StudentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "interviews", dir: "desc" });
+  const [filterStatus, setFilterStatus] = useState<"all"|"active"| "low"| "inactive"|"near">("all");
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "score", dir: "desc" });
   const [tab, setTab] = useState<Tab>("leaderboard");
   const [exporting, setExporting] = useState(false);
   const [emailSending, setEmailSending] = useState(false);
   const [emailResult, setEmailResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -194,9 +196,22 @@ export default function StudentsPage() {
       const resumeLimit = s.resumeUsage?.limit ?? 5;
       const interviewPct = interviewLimit > 0 ? (interviews / interviewLimit) * 100 : 0;
       const resumePct = resumeLimit > 0 ? (resumes / resumeLimit) * 100 : 0;
-      // composite score: weighted avg of usage percentages
-      const score = Math.round(interviewPct * 0.6 + resumePct * 0.4);
-      return { ...s, interviews, interviewLimit, resumes, resumeLimit, interviewPct, resumePct, score };
+      // absolute true score from backend
+      const score = Math.round(s.avgScore || 0);
+      const allScores = s.allScores || [];
+      const avgCvScore = Math.round(s.avgCvScore || 0);
+      const bestInterviewScore = Math.round(s.bestInterviewScore || 0);
+      const bestCvScore = Math.round(s.bestCv?.score || 0);
+
+      let smartStatus = "Inactive";
+      if (interviews > 0 || resumes > 0) {
+        if (interviewPct >= 90 || resumePct >= 90) smartStatus = "Quota Risk";
+        else if (score >= 80 && avgCvScore >= 70) smartStatus = "Outstanding";
+        else if ((score > 0 && score < 50) || (avgCvScore > 0 && avgCvScore < 50)) smartStatus = "Needs Attention";
+        else smartStatus = "On Track";
+      }
+
+      return { ...s, interviews, interviewLimit, resumes, resumeLimit, interviewPct, resumePct, score, allScores, avgCvScore, bestInterviewScore, bestCvScore, smartStatus };
     }),
   [students]);
 
@@ -208,19 +223,31 @@ export default function StudentsPage() {
   /* filtered all-students table */
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return enriched
-      .filter(
-        (s) =>
-          s.name?.toLowerCase().includes(q) ||
-          s.email?.toLowerCase().includes(q) ||
-          s.rollNumber?.toLowerCase().includes(q)
-      )
-      .sort((a, b) => {
-        const dir = sort.dir === "asc" ? 1 : -1;
-        if (sort.key === "name") return dir * (a.name || "").localeCompare(b.name || "");
-        return dir * ((a[sort.key] ?? 0) - (b[sort.key] ?? 0));
+    
+    let result = enriched.filter((s) =>
+      s.name?.toLowerCase().includes(q) ||
+      s.email?.toLowerCase().includes(q) ||
+      s.rollNumber?.toLowerCase().includes(q)
+    );
+
+    if (filterStatus !== "all") {
+      result = result.filter(s => {
+        if (filterStatus === "active") return s.smartStatus === "Outstanding" || s.smartStatus === "On Track";
+        if (filterStatus === "near") return s.smartStatus === "Quota Risk";
+        if (filterStatus === "low") return s.smartStatus === "Needs Attention";
+        if (filterStatus === "inactive") return s.smartStatus === "Inactive";
+        return true;
       });
-  }, [enriched, search, sort]);
+    }
+
+    return result.sort((a, b) => {
+      const dir = sort.dir === "asc" ? 1 : -1;
+      if (sort.key === "name") return dir * (a.name || "").localeCompare(b.name || "");
+      if (sort.key === "interviews") return dir * ((a.score) - (b.score));
+      if (sort.key === "resumes") return dir * ((a.avgCvScore) - (b.avgCvScore));
+      return dir * ((a[sort.key] ?? 0) - (b[sort.key] ?? 0));
+    });
+  }, [enriched, search, sort, filterStatus]);
 
   const uniName = university?.name || "Your Institute";
   const topByInterviews = leaderboard.filter((s) => s.interviews > 0)[0];
@@ -549,22 +576,39 @@ export default function StudentsPage() {
           {tab === "all" && (
             <div className="bg-white dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden">
               {/* toolbar */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700 gap-4 flex-wrap">
-                <h3 className="font-bold text-slate-900 dark:text-white text-sm">
-                  All Students
-                  <span className="ml-2 text-xs font-medium text-slate-400 dark:text-slate-500">
-                    {filtered.length} of {students.length}
-                  </span>
-                </h3>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search by name, email or roll no."
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="pl-8 pr-4 h-9 w-72 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+              <div className="flex flex-col gap-4 px-6 py-4 border-b border-slate-200 dark:border-slate-700">
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm">
+                    All Students
+                    <span className="ml-2 text-xs font-medium text-slate-400 dark:text-slate-500">
+                      {filtered.length} of {students.length}
+                    </span>
+                  </h3>
+                  
+                  <div className="flex items-center gap-3 ml-auto flex-wrap">
+                    <select
+                      value={filterStatus}
+                      onChange={(e) => setFilterStatus(e.target.value as any)}
+                      className="h-9 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm text-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 px-3 cursor-pointer"
+                     >
+                       <option value="all">All Statuses</option>
+                       <option value="active">Active (High Score)</option>
+                       <option value="near">Near Quota Limit</option>
+                       <option value="low">Low Usage</option>
+                       <option value="inactive">Inactive</option>
+                    </select>
+
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search records..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="pl-8 pr-4 h-9 w-64 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -574,11 +618,9 @@ export default function StudentsPage() {
                     <tr className="border-b border-slate-100 dark:border-slate-700/50">
                       {(
                         [
-                          { key: "name", label: "Student" },
-                          { key: "interviews", label: "Interviews" },
-                          { key: "resumes", label: "Resumes" },
-                          { key: "interviewPct", label: "Interview Usage" },
-                          { key: "resumePct", label: "Resume Usage" },
+                          { key: "name", label: "Student Profile" },
+                          { key: "interviews", label: "AI Interviews" },
+                          { key: "resumes", label: "Pro Resumes" },
                         ] as { key: SortKey; label: string }[]
                       ).map((col) => (
                         <th
@@ -589,30 +631,37 @@ export default function StudentsPage() {
                           {col.label} <SortIcon k={col.key} />
                         </th>
                       ))}
-                      <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Score</th>
-                      <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
+                      <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Quota Usage</th>
+                      <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">AI Assessment</th>
+                      <th className="w-8" />
                     </tr>
                   </thead>
                   <tbody>
                     {filtered.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-6 py-12 text-center text-sm text-slate-400">No students found</td>
+                        <td colSpan={8} className="px-6 py-12 text-center text-sm text-slate-400">No students found</td>
                       </tr>
                     ) : (
                       filtered.map((student, i) => (
+                        <React.Fragment key={student._id || i}>
                         <tr
-                          key={student._id || i}
-                          className="border-b border-slate-100 dark:border-slate-700/30 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors"
+                          onClick={() => setExpandedRow(expandedRow === student._id ? null : student._id)}
+                          className={clsx(
+                            "border-b border-slate-100 dark:border-slate-700/30 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors cursor-pointer",
+                            expandedRow === student._id && "bg-slate-50 dark:bg-slate-800/80"
+                          )}
                         >
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-3">
                               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0 overflow-hidden">
                                 {student.profileImageUrl
                                   ? <img src={student.profileImageUrl} alt={student.name} className="w-full h-full object-cover" />
-                                  : student.name?.charAt(0)?.toUpperCase() || "?"}
+                                  : student.name?.charAt(0)?.toUpperCase()}
                               </div>
                               <div>
-                                <p className="font-semibold text-slate-900 dark:text-white">{student.name}</p>
+                                <p className="font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                                  {student.name}
+                                </p>
                                 <p className="text-xs text-slate-500 dark:text-slate-400">
                                   {student.email}
                                   {student.rollNumber && (
@@ -623,39 +672,168 @@ export default function StudentsPage() {
                             </div>
                           </td>
                           <td className="px-6 py-4">
-                            <span className="font-bold text-slate-900 dark:text-white">{student.interviews}</span>
-                            <span className="text-slate-400 text-xs"> / {student.interviewLimit}</span>
+                            <div className="flex items-center gap-3">
+                              <ScoreRing score={student.score} color="#3b82f6" />
+                              <div>
+                                <span className="block text-xs font-bold text-slate-900 dark:text-white">{student.interviews} Sessions</span>
+                                <span className="block text-[10px] text-slate-500 dark:text-slate-400 font-semibold">Avg: {student.score}% · Best: {student.bestInterviewScore}%</span>
+                              </div>
+                            </div>
                           </td>
                           <td className="px-6 py-4">
-                            <span className="font-bold text-slate-900 dark:text-white">{student.resumes}</span>
-                            <span className="text-slate-400 text-xs"> / {student.resumeLimit}</span>
+                            <div className="flex items-center gap-3">
+                              <ScoreRing score={student.avgCvScore} color="#8b5cf6" />
+                              <div>
+                                <span className="block text-xs font-bold text-slate-900 dark:text-white">{student.resumes} Resumes</span>
+                                <span className="block text-[10px] text-slate-500 dark:text-slate-400 font-semibold">Avg ATS: {student.avgCvScore}% · Best: {student.bestCvScore}%</span>
+                              </div>
+                            </div>
                           </td>
-                          <td className="px-6 py-4 min-w-[140px]">
-                            <UsageBar used={student.interviews} limit={student.interviewLimit} color="#3b82f6" />
+
+                          <td className="px-6 py-4 min-w-[160px]">
+                            <div className="flex flex-col gap-2.5">
+                              <div>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Interviews</p>
+                                <UsageBar used={student.interviews} limit={student.interviewLimit} color="#3b82f6" />
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Resumes</p>
+                                <UsageBar used={student.resumes} limit={student.resumeLimit} color="#8b5cf6" />
+                              </div>
+                            </div>
                           </td>
-                          <td className="px-6 py-4 min-w-[140px]">
-                            <UsageBar used={student.resumes} limit={student.resumeLimit} color="#8b5cf6" />
-                          </td>
-                          <td className="px-6 py-4">
-                            <ScoreRing score={student.score} color="#3b82f6" />
-                          </td>
+
                           <td className="px-6 py-4">
                             <span className={clsx(
-                              "text-[10px] font-bold px-2.5 py-1 rounded-full",
-                              student.interviewPct >= 90 || student.resumePct >= 90
-                                ? "bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400"
-                                : student.score >= 50
-                                ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
-                                : student.score > 0
-                                ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400"
-                                : "bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400"
+                              "text-[10px] font-bold px-3 py-1.5 rounded-xl border",
+                              student.smartStatus === "Outstanding" ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/40 dark:border-emerald-700" :
+                              student.smartStatus === "On Track" ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:border-blue-700" :
+                              student.smartStatus === "Needs Attention" ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/40 dark:border-amber-700" :
+                              student.smartStatus === "Quota Risk" ? "bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-900/40 dark:border-rose-700" :
+                              "bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400"
                             )}>
-                              {student.interviewPct >= 90 || student.resumePct >= 90 ? "Near Limit"
-                                : student.score >= 50 ? "Active"
-                                : student.score > 0 ? "Low Usage" : "Inactive"}
+                              {student.smartStatus}
                             </span>
                           </td>
+                          <td className="px-4 py-4">
+                            <ChevronDown className={clsx(
+                              "w-4 h-4 text-slate-400 transition-transform duration-200",
+                              expandedRow === student._id && "rotate-180"
+                            )} />
+                          </td>
                         </tr>
+                        
+                        {/* Expanded details row */}
+                        {expandedRow === student._id && (
+                          <tr className="bg-slate-50/50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-700">
+                            <td colSpan={9} className="px-8 py-6">
+                              {/* Quick stats summary bar */}
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                                {[
+                                  { label: "Sessions Done", value: student.interviews, sub: `of ${student.interviewLimit} limit`, color: "text-blue-600 dark:text-blue-400" },
+                                  { label: "Avg Interview Score", value: `${student.score}%`, sub: `Best: ${student.bestInterviewScore}%`, color: student.score >= 70 ? "text-emerald-600 dark:text-emerald-400" : student.score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-rose-600 dark:text-rose-400" },
+                                  { label: "Resumes Uploaded", value: student.resumes, sub: `of ${student.resumeLimit} limit`, color: "text-violet-600 dark:text-violet-400" },
+                                  { label: "Avg CV Score (ATS)", value: `${student.avgCvScore}%`, sub: `Best: ${student.bestCvScore}%`, color: student.avgCvScore >= 70 ? "text-emerald-600 dark:text-emerald-400" : student.avgCvScore >= 40 ? "text-amber-600 dark:text-amber-400" : "text-rose-600 dark:text-rose-400" },
+                                ].map((stat, si) => (
+                                  <div key={si} className="bg-white dark:bg-slate-700/60 rounded-xl border border-slate-100 dark:border-slate-600 px-4 py-3">
+                                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-0.5">{stat.label}</p>
+                                    <p className={clsx("text-xl font-black", stat.color)}>{stat.value}</p>
+                                    <p className="text-[10px] text-slate-400 mt-0.5">{stat.sub}</p>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="grid md:grid-cols-2 gap-8">
+                                {/* Interview History Details */}
+                                <div>
+                                  <h4 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2 mb-3">
+                                    <Mic className="w-3.5 h-3.5" /> Interview History ({student.allScores?.length || 0})
+                                  </h4>
+                                  {student.allScores?.length > 0 ? (
+                                    <div className="space-y-2 max-h-56 overflow-y-auto pr-2">
+                                      {[...student.allScores]
+                                        .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                                        .map((sc: any, idx: number) => (
+                                        <div key={idx} className="flex items-center justify-between p-2.5 rounded-lg bg-white dark:bg-slate-700 border border-slate-100 dark:border-slate-600">
+                                          <div className="flex flex-col min-w-0 pr-3">
+                                            <span className="text-xs font-semibold truncate dark:text-slate-200">
+                                              {sc.job
+                                                ? (sc.job.length > 40 ? sc.job.slice(0, 40) + "…" : sc.job)
+                                                : "General Interview"}
+                                            </span>
+                                            <span className="text-[10px] text-slate-400">{sc.date ? new Date(sc.date).toLocaleDateString() : "—"}</span>
+                                          </div>
+                                          <span className={clsx(
+                                            "text-xs font-bold px-2.5 py-1 rounded-lg shrink-0",
+                                            sc.score >= 80 ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400" :
+                                            sc.score >= 50 ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400" :
+                                            sc.score > 0  ? "bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400" :
+                                            "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                                          )}>
+                                            {sc.score != null ? `${Math.round(sc.score)}%` : "N/A"}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="text-sm text-slate-400 italic">No interviews taken yet.</p>
+                                  )}
+                                </div>
+                                
+                                {/* CV Detailed Stats */}
+                                <div>
+                                  <h4 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2 mb-3">
+                                    <FileText className="w-3.5 h-3.5" /> All Resumes ({(student.cvList || []).filter((c: any) => c.score != null).length})
+                                  </h4>
+                                  {(student.cvList || []).filter((c: any) => c.score != null && c.score !== '' && !isNaN(Number(c.score))).length > 0 ? (
+                                    <div className="space-y-2 max-h-56 overflow-y-auto pr-2">
+                                      {[...(student.cvList || [])]
+                                        .filter((c: any) => c.score != null && c.score !== '' && !isNaN(Number(c.score)))
+                                        .sort((a: any, b: any) => Number(b.score) - Number(a.score))
+                                        .map((cv: any, idx: number, arr: any[]) => {
+                                          const isBest = idx === 0;
+                                          const isWorst = idx === arr.length - 1 && arr.length > 1;
+                                          return (
+                                            <div key={idx} className={clsx(
+                                              "flex items-center justify-between p-2.5 rounded-lg border",
+                                              isBest
+                                                ? "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-100 dark:border-emerald-900/30"
+                                                : isWorst
+                                                ? "bg-rose-50/60 dark:bg-rose-900/10 border-rose-100 dark:border-rose-900/20"
+                                                : "bg-white dark:bg-slate-700 border-slate-100 dark:border-slate-600"
+                                            )}>
+                                              <div className="flex flex-col min-w-0 pr-3">
+                                                {isBest && <span className="text-[9px] font-bold text-emerald-600 uppercase mb-0.5">🏆 Best</span>}
+                                                {isWorst && <span className="text-[9px] font-bold text-rose-500 uppercase mb-0.5">⚠️ Lowest</span>}
+                                                <span className="text-xs font-semibold truncate dark:text-slate-200">
+                                                  {cv.filename ? cv.filename : `Resume ${idx + 1}`}
+                                                </span>
+                                                <span className="text-[10px] text-slate-400">{cv.date ? new Date(cv.date).toLocaleDateString() : "—"}</span>
+                                              </div>
+                                              <span className={clsx(
+                                                "text-xs font-black px-2.5 py-1 rounded-lg shrink-0",
+                                                Number(cv.score) >= 80 ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400" :
+                                                Number(cv.score) >= 60 ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400" :
+                                                Number(cv.score) >= 40 ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400" :
+                                                "bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400"
+                                              )}>
+                                                {Math.round(Number(cv.score))}%
+                                              </span>
+                                            </div>
+                                          );
+                                        })
+                                      }
+                                    </div>
+                                  ) : (
+                                    <p className="text-sm text-slate-400 italic">No resumes analyzed yet.</p>
+                                  )}
+                                </div>
+
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       ))
                     )}
                   </tbody>
