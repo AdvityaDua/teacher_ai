@@ -8,16 +8,28 @@ import {
   GraduationCap,
   Globe,
   LogOut,
+  UserPlus,
   BookOpen,
+  School,
+  ClipboardList,
+  Bell,
+  Brain,
+  MessageSquare,
 } from "lucide-react";
 import { clearAuth } from "@/lib/auth";
 
 const NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
+  { href: "/dashboard/classes", label: "Classes", icon: School },
+  { href: "/dashboard/assignments", label: "Assignments", icon: ClipboardList },
+  { href: "/dashboard/feedback", label: "Feedback", icon: MessageSquare },
+  { href: "/dashboard/alerts", label: "Alerts", icon: Bell },
+  { href: "/dashboard/insights", label: "Insights", icon: Brain },
   { href: "/dashboard/students", label: "Students", icon: GraduationCap },
   { href: "/dashboard/teachers", label: "Teachers", icon: Users },
   { href: "/dashboard/traffic", label: "Traffic & Visitors", icon: Globe },
 ];
+
 
 export default function Sidebar() {
   const pathname = usePathname();

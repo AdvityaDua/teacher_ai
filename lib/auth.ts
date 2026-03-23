@@ -1,7 +1,9 @@
 import type { AuthUser } from "@/types";
 
+let currentToken: string | null = null;
+
 export function saveAuth(token: string, user: AuthUser) {
-  localStorage.setItem("teacher_token", token);
+  currentToken = token;
   localStorage.setItem("teacher_user", JSON.stringify(user));
 }
 
@@ -15,11 +17,11 @@ export function getStoredUser(): AuthUser | null {
 }
 
 export function getToken(): string | null {
-  return localStorage.getItem("teacher_token");
+  return currentToken;
 }
 
 export function clearAuth() {
-  localStorage.removeItem("teacher_token");
+  currentToken = null;
   localStorage.removeItem("teacher_user");
 }
 

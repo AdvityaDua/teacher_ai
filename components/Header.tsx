@@ -1,5 +1,6 @@
 "use client";
 import { ThemeToggle } from "./ThemeToggle";
+import { AlertsDropdown } from "./AlertsDropdown";
 
 interface HeaderProps {
   title: string;
@@ -20,6 +21,7 @@ export default function Header({ title, subtitle, user }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-3">
+        <AlertsDropdown />
         <ThemeToggle />
         {user && (
           <div className="flex items-center gap-2 pl-3 border-l border-slate-200 dark:border-slate-700">
